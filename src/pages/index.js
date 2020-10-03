@@ -4,10 +4,12 @@ import { useMove } from "react-use-gesture"
 import * as THREE from "three"
 
 // TODO:
-// xy are flipped?
 // * accurate mouse clicks
-// * dragable last wheel
-// * taking turns
+// * wheel death
+// * cascading wheel death
+// * keeping score
+// * shield support from nearby allies
+// * minimum distance from another wheel
 // * fancy lighting
 
 // x' = x + r * cos(t)
@@ -24,22 +26,33 @@ import * as THREE from "three"
 const BoxSize = 0.5
 const ShieldSize = 0.1
 const ShieldCount = 12
-const ShieldRadius = 0.2
+const ShieldRadius = 0.3
 const ShieldEnergy = 3
 const AttackEnergy = 1
 const DistanceFactor = 0.5
+const TeamColors = ["green", "blue"]
+const DeathColor = "gray"
+const ImpendingDeathColor = "yellow"
 
-const boxPositiosn = []
-
-function calculateShield(boxIndex, shieldIndex, teamColor, boxPositionsRef) {
+function calculateShield(boxIndex, shieldIndex, boxes, boxPositionsRef) {
   const [wheelX, wheelY, wheelZ] = boxPositionsRef.current[boxIndex]
   const shieldAngle = (2 * Math.PI * shieldIndex) / ShieldCount
   const shieldX = wheelX + ShieldRadius * Math.cos(shieldAngle)
   const shieldY = wheelY + ShieldRadius * Math.sin(shieldAngle)
 
+  const boxColor = boxes[boxIndex].teamColor
+
+  if (boxColor === DeathColor) {
+    return {
+      position: [shieldX, shieldY, wheelZ],
+      color: DeathColor,
+    }
+  }
+
   let damage = 0
-  for (let enemyIndex in boxPositionsRef.current) {
-    if (enemyIndex % 2 === boxIndex % 2) {
+  for (let enemyIndex in boxes) {
+    const enemyBoxColor = boxes[enemyIndex].teamColor
+    if (enemyBoxColor === DeathColor || enemyBoxColor === boxColor) {
       continue
     }
     const [enemyX, enemyY, _] = boxPositionsRef.current[enemyIndex]
@@ -58,20 +71,31 @@ function calculateShield(boxIndex, shieldIndex, teamColor, boxPositionsRef) {
         Math.pow(enemyRadius * DistanceFactor, 2)
     }
   }
+  const x = Math.min(1, damage / ShieldEnergy)
   return {
     position: [shieldX, shieldY, wheelZ],
-    color: new THREE.Color(Math.min(1, damage / ShieldEnergy), 0, 0),
+    color:
+      x === 1
+        ? ImpendingDeathColor
+        : new THREE.Color(Math.min(1, damage / ShieldEnergy), 0, 0),
   }
 }
 
-function Box({ boxIndex, color, boxPositionsRef }) {
+function Box({ boxIndex, boxes, boxPositionsRef }) {
   // This reference will give us direct access to the mesh
   const mesh = useRef()
 
   // Rotate mesh every frame, this is outside of React without overhead
   useFrame(() => {
-    mesh.current.rotation.x = mesh.current.rotation.y += 0.01
-    mesh.current.position.fromArray(boxPositionsRef.current[boxIndex])
+    if (boxes[boxIndex].teamColor !== DeathColor) {
+      mesh.current.rotation.x = mesh.current.rotation.y += 0.01
+      mesh.current.position.fromArray(boxPositionsRef.current[boxIndex])
+      mesh.current.material.color.set(
+        BoxLives(boxIndex, boxes, boxPositionsRef)
+          ? boxes[boxIndex].teamColor
+          : ImpendingDeathColor
+      )
+    }
   })
 
   return (
@@ -81,12 +105,12 @@ function Box({ boxIndex, color, boxPositionsRef }) {
       scale={[0.4, 0.4, 0.4]} // TODO: factor into BoxSize
     >
       <boxBufferGeometry args={[BoxSize, BoxSize, BoxSize]} />
-      <meshStandardMaterial color={color} />
+      <meshStandardMaterial color={boxes[boxIndex].teamColor} />
     </mesh>
   )
 }
 
-function Shield({ boxIndex, shieldIndex, teamColor, boxPositionsRef }) {
+function Shield({ boxIndex, shieldIndex, boxes, boxPositionsRef }) {
   // This reference will give us direct access to the mesh
   const mesh = useRef()
 
@@ -96,21 +120,19 @@ function Shield({ boxIndex, shieldIndex, teamColor, boxPositionsRef }) {
     const { position, color } = calculateShield(
       boxIndex,
       shieldIndex,
-      teamColor,
+      boxes,
       boxPositionsRef
     )
     mesh.current.position.fromArray(position)
-    mesh.current.material.color = color
+    mesh.current.material.color.set(color)
   })
 
   const { position, color } = calculateShield(
     boxIndex,
     shieldIndex,
-    teamColor,
+    boxes,
     boxPositionsRef
   )
-
-  console.log(position, color)
 
   return (
     <mesh
@@ -124,19 +146,12 @@ function Shield({ boxIndex, shieldIndex, teamColor, boxPositionsRef }) {
   )
 }
 
-const Wheel = React.memo(function Wheel({
-  boxIndex,
-  teamColor,
-  boxPositionsRef,
-}) {
-  //const shields = calculateShields(wheelX, wheelY, teamColor, boxes)
-
-  console.log([...Array(ShieldCount)])
+const Wheel = React.memo(function Wheel({ boxIndex, boxes, boxPositionsRef }) {
   return (
     <group>
       <Box
         boxIndex={boxIndex}
-        color={teamColor}
+        boxes={boxes}
         boxPositionsRef={boxPositionsRef}
       />
       {[...Array(ShieldCount).keys()].map(i => (
@@ -144,7 +159,7 @@ const Wheel = React.memo(function Wheel({
           key={i}
           boxIndex={boxIndex}
           shieldIndex={i}
-          teamColor={teamColor}
+          boxes={boxes}
           boxPositionsRef={boxPositionsRef}
         />
       ))}
@@ -172,23 +187,33 @@ function BackWall({ position, addBox, moveLastBox }) {
   )
 }
 
-const teamColors = ["green", "blue"]
-
-function BoxLives(boxes, boxPositionsRef, boxIndex) {
-  return true
-  // const shields = calculateShields(box.x, box.y, box.teamColor, boxes)
-  // for (const shield of shields) {
-  //   if (shield.damage == 0) {
-  //     return true
-  //   }
-  // }
-  // return false
+function BoxLives(boxIndex, boxes, boxPositionsRef) {
+  for (let i = 0; i < ShieldCount; i++) {
+    if (calculateShield(boxIndex, i, boxes, boxPositionsRef).color.r < 1) {
+      return true
+    }
+  }
+  return false
 }
 
-const BoxPositionContext = React.createContext(null)
+function KillBoxes(boxes, boxPositionsRef) {
+  let deadBoxes = 1
+  for (let i = 0; i < 5; i++) {
+    deadBoxes = 0
+    for (let boxIndex in boxes) {
+      if (!BoxLives(boxIndex, boxes, boxPositionsRef)) {
+        deadBoxes++
+        boxes[boxIndex].teamColor = DeathColor
+      }
+    }
+    if (deadBoxes === 0) {
+      return
+    }
+  }
+}
 
 export default function App() {
-  const [boxes, setBoxes] = useState([{ teamColor: teamColors[0] }])
+  const [boxes, setBoxes] = useState([{ teamColor: TeamColors[0] }])
   const boxPositionsRef = useRef([{ x: 10, y: 10 }])
 
   return (
@@ -213,10 +238,11 @@ export default function App() {
               boxPositionsRef.current.length - 1
             ] = position
 
-            if (BoxLives(boxes, boxPositionsRef, boxes.length - 1)) {
+            if (BoxLives(boxes.length - 1, boxes, boxPositionsRef)) {
               const newBox = {
-                teamColor: teamColors[boxes.length % 2],
+                teamColor: TeamColors[boxes.length % 2],
               }
+              KillBoxes(boxes, boxPositionsRef)
               boxPositionsRef.current.push(position)
               setBoxes(boxes.concat(newBox))
             }
@@ -226,7 +252,7 @@ export default function App() {
           <Wheel
             key={i}
             boxIndex={i}
-            teamColor={b.teamColor}
+            boxes={boxes}
             boxPositionsRef={boxPositionsRef}
           />
         ))}
