@@ -1,0 +1,1 @@
+.board{width:1000px;height:1000px;border:2px solid red}.board,.circle{left:50%;top:50%;position:relative}.circle{background-color:#00f;border-radius:50%;width:100px;height:100px}
