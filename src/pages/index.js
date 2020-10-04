@@ -33,6 +33,28 @@ const DistanceFactor = 0.5
 const TeamColors = ["green", "blue"]
 const DeathColor = "gray"
 const ImpendingDeathColor = "yellow"
+const ShieldGradientColors = ["white", "yellow", "red"]
+
+function ConvertDamageToColor(damage) {
+  if (damage === 1) {
+    return ShieldGradientColors[ShieldGradientColors.length - 1]
+  }
+  if (damage === 2) {
+    return DeathColor
+  }
+  const scaledDamage = damage * (ShieldGradientColors.length - 1)
+  const gradientIndex = Math.floor(scaledDamage)
+  const baseColor = new THREE.Color(ShieldGradientColors[gradientIndex])
+  // console.log(
+  //   baseColor,
+  //   ShieldGradientColors[gradientIndex + 1],
+  //   scaledDamage - gradientIndex
+  // )
+  return baseColor.lerp(
+    new THREE.Color(ShieldGradientColors[gradientIndex + 1]),
+    scaledDamage - gradientIndex
+  )
+}
 
 function calculateShield(boxIndex, shieldIndex, boxes, boxPositionsRef) {
   const [wheelX, wheelY, wheelZ] = boxPositionsRef.current[boxIndex]
@@ -45,7 +67,7 @@ function calculateShield(boxIndex, shieldIndex, boxes, boxPositionsRef) {
   if (boxColor === DeathColor) {
     return {
       position: [shieldX, shieldY, wheelZ],
-      color: DeathColor,
+      damage: 2,
     }
   }
 
@@ -74,10 +96,7 @@ function calculateShield(boxIndex, shieldIndex, boxes, boxPositionsRef) {
   const x = Math.min(1, damage / ShieldEnergy)
   return {
     position: [shieldX, shieldY, wheelZ],
-    color:
-      x === 1
-        ? ImpendingDeathColor
-        : new THREE.Color(Math.min(1, damage / ShieldEnergy), 0, 0),
+    damage: Math.min(1, damage / ShieldEnergy),
   }
 }
 
@@ -117,17 +136,19 @@ function Shield({ boxIndex, shieldIndex, boxes, boxPositionsRef }) {
   // Rotate mesh every frame, this is outside of React without overhead
   useFrame(() => {
     mesh.current.rotation.x = mesh.current.rotation.y += 0.01
-    const { position, color } = calculateShield(
+    const { position, damage } = calculateShield(
       boxIndex,
       shieldIndex,
       boxes,
       boxPositionsRef
     )
+    mesh.current.scale.x = mesh.current.scale.y = mesh.current.scale.z =
+      damage === 1 ? 0.2 : 0.6
     mesh.current.position.fromArray(position)
-    mesh.current.material.color.set(color)
+    mesh.current.material.color.set(ConvertDamageToColor(damage))
   })
 
-  const { position, color } = calculateShield(
+  const { position, damage } = calculateShield(
     boxIndex,
     shieldIndex,
     boxes,
@@ -141,7 +162,7 @@ function Shield({ boxIndex, shieldIndex, boxes, boxPositionsRef }) {
       scale={[0.4, 0.4, 0.4]} // TODO: factor out
     >
       <boxBufferGeometry args={[ShieldSize, ShieldSize, ShieldSize]} />
-      <meshStandardMaterial color={color} />
+      <meshStandardMaterial color={ConvertDamageToColor(damage)} />
     </mesh>
   )
 }
@@ -189,7 +210,7 @@ function BackWall({ position, addBox, moveLastBox }) {
 
 function BoxLives(boxIndex, boxes, boxPositionsRef) {
   for (let i = 0; i < ShieldCount; i++) {
-    if (calculateShield(boxIndex, i, boxes, boxPositionsRef).color.r < 1) {
+    if (calculateShield(boxIndex, i, boxes, boxPositionsRef).damage < 1) {
       return true
     }
   }
